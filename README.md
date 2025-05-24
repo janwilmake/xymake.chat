@@ -6,7 +6,7 @@ It's super basic but it's cool DO because it's literally scalable to all of X an
 
 How I made it:
 
-- Made possible by the [DORM Template](https://github.com/janwilmake/dorm) and [X OAuth Template](https://uuithub.com/janwilmake/x-oauth-template)
+- Made possible by the [DORM Template](https://github.com/janwilmake/dorm) and [X OAuth Template](https://github.com/janwilmake/x-oauth-template)
 - [![](https://b.lmpify.com/Iteration_1)](https://lmpify.com/httpsuuithubcom-m69t8m0)
 - [![](https://b.lmpify.com/Iteration_2)](https://lmpify.com/httpsuithubcomj-ea8mux0)
 - After that, I just needed a small fix: Claude forgot to put `.toArray()` behind the query to insert the messages which caused it to fail

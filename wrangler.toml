@@ -1,0 +1,21 @@
+name = "xymake_chat"
+main = "main.ts"
+compatibility_date = "2024-04-15"
+dev.port = 3000
+
+[route]
+custom_domain = true
+pattern = "chat.xymake.com"
+
+[[durable_objects.bindings]]
+name = "DORM_NAMESPACE"
+class_name = "DORM"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DORM"]
+
+[vars]
+X_CLIENT_ID = "MWlyVUFQWm5fN01qWTlnaVlBbmY6MTpjaQ"
+X_REDIRECT_URI = "https://login.xymake.com/callback"
+LOGIN_REDIRECT_URI = "/dashboard"

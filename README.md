@@ -1,5 +1,9 @@
 An infinitely scalable X Chat using Durable Objects.
 
+It's cool because it's literally scalable to all of X and it's just 1100 lines of code
+
+[![janwilmake/xymake.chat context](https://badge.forgithub.com/janwilmake/xymake.chat)](https://uithub.com/janwilmake/xymake.chat)
+
 How I made it:
 
 - [![](https://b.lmpify.com/Iteration_1)](https://lmpify.com/httpsuuithubcom-m69t8m0)

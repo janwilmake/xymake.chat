@@ -1,6 +1,6 @@
 An infinitely scalable X Chat using Durable Objects.
 
-It's cool because it's literally scalable to all of X and it's just 1100 lines of code
+It's super basic but it's cool DO because it's literally scalable to all of X and it's just 1100 lines of code.
 
 [![janwilmake/xymake.chat context](https://badge.forgithub.com/janwilmake/xymake.chat)](https://uithub.com/janwilmake/xymake.chat)
 

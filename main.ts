@@ -12,6 +12,8 @@ export interface Env {
   DORM_NAMESPACE: DurableObjectNamespace<DORM>;
 }
 
+const IS_LOCALHOST=true;
+
 export const html = (strings: TemplateStringsArray, ...values: any[]) => {
   return strings.reduce(
     (result, str, i) => result + str + (values[i] || ""),
@@ -97,6 +99,7 @@ export default {
     const method = request.method;
     const cookie = request.headers.get("Cookie");
     const xAccessToken = getCookieValue(cookie, "x_access_token");
+    const username = getCookieValue(cookie, "x_username");
     const userId = getCookieValue(cookie, "x_user_id");
     const accessToken = xAccessToken || url.searchParams.get("apiKey");
 
@@ -114,13 +117,13 @@ export default {
       : undefined;
     const prefix = `/admin/${dbName}`;
 
-    // Initialize DORM client for user database
+    // Initialize DORM client for user database using username
     const client = createClient({
       doNamespace: env.DORM_NAMESPACE,
       version: "v2", // Version prefix for migrations
       migrations,
       ctx, // Pass execution context for waitUntil
-      name: dbName || userId || "anonymous", // Use user ID as database name
+      name: dbName || username || "anonymous", // Use username as database name
     });
 
     // Handle DB middleware requests (for exploring the DB)
@@ -149,13 +152,15 @@ export default {
 
       headers.append("Location", Location);
 
+        const securePart = IS_LOCALHOST?"":" Secure;";
+
       headers.append(
         "Set-Cookie",
-        `x_oauth_state=${state}; HttpOnly; Path=/; Secure; SameSite=Lax; Max-Age=600`,
+        `x_oauth_state=${state}; HttpOnly; Path=/;${securePart} SameSite=Lax; Max-Age=600`,
       );
       headers.append(
         "Set-Cookie",
-        `x_code_verifier=${codeVerifier}; HttpOnly; Path=/; Secure; SameSite=Lax; Max-Age=600`,
+        `x_code_verifier=${codeVerifier}; HttpOnly; Path=/;${securePart} SameSite=Lax; Max-Age=600`,
       );
 
       return new Response("Redirecting", {
@@ -251,7 +256,7 @@ export default {
           version: "v2",
           migrations,
           ctx,
-          name: String(id),
+          name: String(username), // Use username instead of ID
         });
 
         // Check if user exists in database
@@ -288,25 +293,26 @@ export default {
           ...getCorsHeaders(),
           Location: url.origin + (env.LOGIN_REDIRECT_URI || "/"),
         });
+        const securePart = IS_LOCALHOST?"":" Secure;";
 
         // Set access token cookie and clear temporary cookies
         headers.append(
           "Set-Cookie",
           `x_access_token=${encodeURIComponent(
             access_token,
-          )}; HttpOnly; Path=/; Secure; SameSite=Lax; Max-Age=34560000`,
+          )}; HttpOnly; Path=/;${securePart} SameSite=Lax; Max-Age=34560000`,
         );
         headers.append(
           "Set-Cookie",
           `x_user_id=${encodeURIComponent(
             id,
-          )}; HttpOnly; Path=/; Secure; SameSite=Lax; Max-Age=34560000`,
+          )}; HttpOnly; Path=/;${securePart} SameSite=Lax; Max-Age=34560000`,
         );
         headers.append(
           "Set-Cookie",
           `x_username=${encodeURIComponent(
             username,
-          )}; Path=/; Secure; SameSite=Lax; Max-Age=34560000`,
+          )}; Path=/;${securePart} SameSite=Lax; Max-Age=34560000`,
         );
         headers.append(
           "Set-Cookie",
@@ -328,6 +334,24 @@ export default {
             <html lang="en">
               <head>
                 <title>Login Failed</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <style>
+                  body {
+                    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                    background-color: #000;
+                    color: #fff;
+                    margin: 0;
+                    padding: 20px;
+                    line-height: 1.5;
+                  }
+                  h1 {
+                    color: #fff;
+                  }
+                  a {
+                    color: #1DA1F2;
+                    text-decoration: none;
+                  }
+                </style>
               </head>
               <body>
                 <h1>X Login Failed</h1>
@@ -352,12 +376,12 @@ export default {
 
     // Logout route
     if (url.pathname === "/logout") {
-      // Update last_login in the database if we have the user ID
-      if (userId) {
+      // Update last_login in the database if we have the username
+      if (username) {
         await client.exec(
-          "UPDATE users SET last_login = ? WHERE id = ?",
+          "UPDATE users SET last_login = ? WHERE username = ?",
           new Date().toISOString(),
-          userId
+          username
         );
       }
 
@@ -366,17 +390,19 @@ export default {
         ...getCorsHeaders(),
       });
 
+        const securePart = IS_LOCALHOST?"":" Secure;";
+
       headers.append(
         "Set-Cookie",
-        "x_access_token=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax",
+        "x_access_token=; Max-Age=0; Path=/; HttpOnly;${securePart} SameSite=Lax",
       );
       headers.append(
         "Set-Cookie",
-        "x_user_id=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax",
+        "x_user_id=; Max-Age=0; Path=/; HttpOnly;${securePart} SameSite=Lax",
       );
       headers.append(
         "Set-Cookie",
-        "x_username=; Max-Age=0; Path=/; Secure; SameSite=Lax",
+        "x_username=; Max-Age=0; Path=/;${securePart} SameSite=Lax",
       );
 
       return new Response("Logging out...", { status: 302, headers });
@@ -384,7 +410,7 @@ export default {
 
     // Handle message creation endpoint
     if (url.pathname === "/message" && method === "POST") {
-      if (!accessToken || !userId) {
+      if (!accessToken || !username) {
         return new Response("Unauthorized", { 
           status: 401, 
           headers: getCorsHeaders() 
@@ -392,21 +418,6 @@ export default {
       }
 
       try {
-        // Get current user's username
-        const currentUser = await client.exec(
-          "SELECT username FROM users WHERE id = ?",
-          userId
-        ).one();
-
-        if (!currentUser) {
-          return new Response("User not found", { 
-            status: 404, 
-            headers: getCorsHeaders() 
-          });
-        }
-
-        const currentUsername = currentUser.username as string;
-
         // Parse request body
         const formData = await request.formData();
         const recipientUsername = formData.get("recipient") as string;
@@ -419,47 +430,41 @@ export default {
           });
         }
 
+
         // Create channel ID (alphabetically sorted usernames)
-        const channelId = createChannelId(currentUsername, recipientUsername);
+        const channelId = createChannelId(username, recipientUsername);
+        console.log({channelId,username,recipientUsername,messageText})
 
         // Add message to current user's database
         await client.exec(
           "INSERT INTO messages (channel_id, login, message) VALUES (?, ?, ?)",
           channelId,
-          currentUsername,
+          username,
           messageText
-        );
+        ).toArray()
 
         // Create a client for the recipient
-        // We need to find the recipient's ID first
-        const recipientId = await client.exec(
-          "SELECT id FROM users WHERE username = ?",
-          recipientUsername
-        ).one().catch(() => null);
+        const recipientClient = createClient({
+          doNamespace: env.DORM_NAMESPACE,
+          version: "v2",
+          migrations,
+          ctx,
+          name: recipientUsername,
+        });
 
-        if (recipientId) {
-          // Recipient exists in our system, add message to their database too
-          const recipientClient = createClient({
-            doNamespace: env.DORM_NAMESPACE,
-            version: "v2",
-            migrations,
-            ctx,
-            name: String(recipientId.id),
-          });
+        // Add message to recipient's database
+        await recipientClient.exec(
+          "INSERT INTO messages (channel_id, login, message) VALUES (?, ?, ?)",
+          channelId,
+          username,
+          messageText
+        ).toArray()
 
-          await recipientClient.exec(
-            "INSERT INTO messages (channel_id, login, message) VALUES (?, ?, ?)",
-            channelId,
-            currentUsername,
-            messageText
-          );
-        }
-
-        // Redirect back to dashboard
+        // Redirect back to the conversation
         return new Response("Message sent", { 
           status: 302, 
           headers: {
-            Location: "/dashboard",
+            Location: `/${recipientUsername}`,
             ...getCorsHeaders()
           }
         });
@@ -471,363 +476,25 @@ export default {
       }
     }
 
-    // Dashboard route - show user profile and messages if logged in
-    if (url.pathname === "/dashboard") {
-      if (!accessToken || !userId) {
-        // Redirect to login if no access token
-        return new Response("Redirecting to login...", {
-          status: 302,
-          headers: {
-            Location: "/login",
-            ...getCorsHeaders(),
-          },
-        });
-      }
-
-      // Try to get user data from database with matching access_token
-      const userData = await client.exec(
-        "SELECT * FROM users WHERE id = ? AND access_token = ?",
-        userId,
-        accessToken
-      ).one().catch(() => null);
-
-      if (!userData) {
-        return new Response("Redirecting to login...", {
-          status: 302,
-          headers: { Location: "/login", ...getCorsHeaders() },
-        });
-      }
-
-      // Get channel ID from URL if provided
-      const activeChannel = url.searchParams.get('channel');
-      
-      // Get all messages grouped by channel
-      const channels = await client.exec(
-        "SELECT DISTINCT channel_id FROM messages"
-      ).toArray();
-
-      let messages = [];
-      let otherUsername = "";
-      
-      if (activeChannel) {
-        // Get messages for the selected channel
-        messages = await client.exec(
-          "SELECT * FROM messages WHERE channel_id = ? ORDER BY created_at ASC",
-          activeChannel
-        ).toArray();
-        
-        // Extract the other username from the channel ID
-        const channelParts = activeChannel.split(':');
-        otherUsername = channelParts[0] === userData.username ? channelParts[1] : channelParts[0];
-      }
-
-      return new Response(
-        html`
-          <!DOCTYPE html>
-          <html>
-            <head>
-              <title>X Messaging App</title>
-              <meta charset="utf-8">
-              <meta name="viewport" content="width=device-width, initial-scale=1">
-              <style>
-                body { 
-                  font-family: -apple-system, BlinkMacSystemFont, sans-serif; 
-                  margin: 0; 
-                  padding: 0;
-                  height: 100vh;
-                  display: flex;
-                  flex-direction: column;
-                }
-                header {
-                  background: #1DA1F2;
-                  color: white;
-                  padding: 10px 20px;
-                  display: flex;
-                  justify-content: space-between;
-                  align-items: center;
-                }
-                .profile {
-                  display: flex;
-                  align-items: center;
-                  gap: 10px;
-                }
-                .profile img {
-                  border-radius: 50%;
-                  width: 40px;
-                  height: 40px;
-                }
-                .btn {
-                  display: inline-block;
-                  padding: 8px 16px;
-                  background: white;
-                  color: #1DA1F2;
-                  text-decoration: none;
-                  border-radius: 4px;
-                  font-weight: bold;
-                }
-                .container {
-                  display: flex;
-                  flex: 1;
-                  overflow: hidden;
-                }
-                .sidebar {
-                  width: 30%;
-                  background: #f5f8fa;
-                  border-right: 1px solid #e1e8ed;
-                  overflow-y: auto;
-                }
-                .message-area {
-                  width: 70%;
-                  display: flex;
-                  flex-direction: column;
-                  background: #fff;
-                }
-                .channel {
-                  padding: 15px;
-                  border-bottom: 1px solid #e1e8ed;
-                  cursor: pointer;
-                }
-                .channel:hover {
-                  background: #e8f5fd;
-                }
-                .channel.active {
-                  background: #e8f5fd;
-                  border-left: 3px solid #1DA1F2;
-                }
-                .messages {
-                  flex: 1;
-                  overflow-y: auto;
-                  padding: 20px;
-                }
-                .message-input {
-                  padding: 15px;
-                  border-top: 1px solid #e1e8ed;
-                }
-                .message-form {
-                  display: flex;
-                  gap: 10px;
-                }
-                .message-form input[type="text"] {
-                  flex: 1;
-                  padding: 10px;
-                  border: 1px solid #e1e8ed;
-                  border-radius: 20px;
-                }
-                .message-form button {
-                  background: #1DA1F2;
-                  color: white;
-                  border: none;
-                  border-radius: 20px;
-                  padding: 10px 20px;
-                  cursor: pointer;
-                }
-                .message-bubble {
-                  max-width: 70%;
-                  padding: 10px 15px;
-                  margin-bottom: 10px;
-                  border-radius: 18px;
-                  position: relative;
-                }
-                .message-outgoing {
-                  background: #1DA1F2;
-                  color: white;
-                  margin-left: auto;
-                  border-bottom-right-radius: 5px;
-                }
-                .message-incoming {
-                  background: #e1e8ed;
-                  color: #14171a;
-                  margin-right: auto;
-                  border-bottom-left-radius: 5px;
-                }
-                .message-time {
-                  font-size: 0.7em;
-                  margin-top: 5px;
-                  opacity: 0.7;
-                }
-                .channel-header {
-                  padding: 15px;
-                  border-bottom: 1px solid #e1e8ed;
-                  font-weight: bold;
-                  display: flex;
-                  justify-content: space-between;
-                }
-                .new-chat {
-                  display: block;
-                  margin: 15px;
-                  text-align: center;
-                  padding: 10px;
-                  background: #1DA1F2;
-                  color: white;
-                  text-decoration: none;
-                  border-radius: 4px;
-                  font-weight: bold;
-                }
-                .new-chat-form {
-                  padding: 15px;
-                  background: #f5f8fa;
-                  border-bottom: 1px solid #e1e8ed;
-                  display: none;
-                }
-                .new-chat-form.active {
-                  display: block;
-                }
-                .new-chat-form input {
-                  width: 100%;
-                  padding: 10px;
-                  margin-bottom: 10px;
-                  border: 1px solid #e1e8ed;
-                  border-radius: 4px;
-                }
-                .new-chat-form button {
-                  width: 100%;
-                  padding: 10px;
-                  background: #1DA1F2;
-                  color: white;
-                  border: none;
-                  border-radius: 4px;
-                  cursor: pointer;
-                }
-                .empty-state {
-                  display: flex;
-                  flex-direction: column;
-                  align-items: center;
-                  justify-content: center;
-                  height: 100%;
-                  color: #657786;
-                  text-align: center;
-                  padding: 20px;
-                }
-                .empty-state svg {
-                  width: 80px;
-                  height: 80px;
-                  margin-bottom: 20px;
-                  fill: #657786;
-                }
-                .empty-state h3 {
-                  margin-bottom: 10px;
-                }
-              </style>
-            </head>
-            <body>
-              <header>
-                <div class="profile">
-                  <img src="${userData.profile_image_url}" alt="Profile">
-                  <div>
-                    <strong>${userData.name}</strong>
-                  </div>
-                </div>
-                <a href="/logout" class="btn">Logout</a>
-              </header>
-              
-              <div class="container">
-                <div class="sidebar">
-                  <a href="#" class="new-chat" id="newChatBtn">New Message</a>
-                  
-                  <div class="new-chat-form" id="newChatForm">
-                    <form action="/message" method="post">
-                      <input type="text" name="recipient" placeholder="Enter username" required>
-                      <input type="text" name="message" placeholder="Type your message" required>
-                      <button type="submit">Start Chat</button>
-                    </form>
-                  </div>
-                  
-                  ${channels.length === 0 
-                    ? `<div style="padding: 20px; color: #657786; text-align: center;">No conversations yet</div>` 
-                    : channels.map(channel => {
-                        const channelParts = (channel.channel_id as string).split(':');
-                        const otherUser = channelParts[0] === userData.username ? channelParts[1] : channelParts[0];
-                        const isActive = activeChannel === channel.channel_id;
-                        
-                        return `
-                          <div class="channel ${isActive ? 'active' : ''}" 
-                               onclick="window.location.href='/dashboard?channel=${channel.channel_id}'">
-                            <strong>@${otherUser}</strong>
-                          </div>
-                        `;
-                      }).join('')
-                  }
-                </div>
-                
-                <div class="message-area">
-                  ${activeChannel 
-                    ? `
-                      <div class="channel-header">
-                        <div>Chat with @${otherUsername}</div>
-                      </div>
-                      
-                      <div class="messages">
-                        ${messages.length === 0 
-                          ? `<div style="text-align: center; color: #657786; padding: 20px;">No messages yet</div>` 
-                          : messages.map(msg => {
-                              const isOutgoing = msg.login === userData.username;
-                              const time = new Date(msg.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-                              
-                              return `
-                                <div class="message-bubble ${isOutgoing ? 'message-outgoing' : 'message-incoming'}">
-                                  ${msg.message}
-                                  <div class="message-time">${time}</div>
-                                </div>
-                              `;
-                            }).join('')
-                        }
-                      </div>
-                      
-                      <div class="message-input">
-                        <form class="message-form" action="/message" method="post">
-                          <input type="hidden" name="recipient" value="${otherUsername}">
-                          <input type="text" name="message" placeholder="Type a message..." required autofocus>
-                          <button type="submit">Send</button>
-                        </form>
-                      </div>
-                    `
-                    : `
-                      <div class="empty-state">
-                        <svg viewBox="0 0 24 24">
-                          <path d="M19.25 3.018H4.75C3.233 3.018 2 4.252 2 5.77v12.495c0 1.518 1.233 2.752 2.75 2.752h14.5c1.517 0 2.75-1.234 2.75-2.752V5.77c0-1.518-1.233-2.752-2.75-2.752zm-14.5 1.5h14.5c.69 0 1.25.56 1.25 1.25v.714l-8.05 5.367c-.273.18-.626.182-.9-.002L3.5 6.482v-.714c0-.69.56-1.25 1.25-1.25zm14.5 14.998H4.75c-.69 0-1.25-.56-1.25-1.25V8.24l7.24 4.83c.383.256.822.384 1.26.384.44 0 .877-.128 1.26-.383l7.24-4.83v10.022c0 .69-.56 1.25-1.25 1.25z"></path>
-                        </svg>
-                        <h3>Your Messages</h3>
-                        <p>Select a conversation or start a new one</p>
-                      </div>
-                    `
-                  }
-                </div>
-              </div>
-              
-              <script>
-                // Toggle new chat form
-                document.getElementById('newChatBtn').addEventListener('click', function(e) {
-                  e.preventDefault();
-                  const form = document.getElementById('newChatForm');
-                  form.classList.toggle('active');
-                });
-                
-                // Auto-scroll to bottom of messages
-                const messagesContainer = document.querySelector('.messages');
-                if (messagesContainer) {
-                  messagesContainer.scrollTop = messagesContainer.scrollHeight;
-                }
-              </script>
-            </body>
-          </html>
-        `,
-        {
-          headers: {
-            "content-type": "text/html",
-            ...getCorsHeaders(),
-          },
-        },
-      );
-    }
-
     // Default route
     if (url.pathname === "/" || url.pathname === "") {
+      // If user is logged in, redirect to inbox
+      if (accessToken && username) {
+        return new Response("Redirecting to inbox...", {
+          status: 302,
+          headers: {
+            Location: "/inbox",
+            ...getCorsHeaders(),
+          },
+        });
+      }
+
       return new Response(
         html`
           <!DOCTYPE html>
           <html>
             <head>
-              <title>X Messaging App</title>
+              <title>X Messaging</title>
               <meta charset="utf-8">
               <meta name="viewport" content="width=device-width, initial-scale=1">
               <style>
@@ -837,9 +504,11 @@ export default {
                   margin: 0 auto; 
                   padding: 20px;
                   line-height: 1.5;
+                  background-color: #000;
+                  color: #fff;
                 }
                 h1 { 
-                  color: #1DA1F2; 
+                  color: #fff; 
                   margin-bottom: 20px;
                 }
                 .hero {
@@ -849,8 +518,8 @@ export default {
                 .btn { 
                   display: inline-block; 
                   padding: 12px 24px; 
-                  background: #1DA1F2; 
-                  color: white; 
+                  background: #fff; 
+                  color: #000; 
                   text-decoration: none; 
                   border-radius: 30px;
                   font-weight: bold;
@@ -863,25 +532,33 @@ export default {
                   display: flex;
                   margin-bottom: 20px;
                   align-items: center;
+                  border: 1px solid #333;
+                  border-radius: 8px;
+                  padding: 15px;
                 }
                 .feature-icon {
                   width: 50px;
                   height: 50px;
-                  background: #e8f5fd;
+                  background: #333;
                   border-radius: 50%;
                   display: flex;
                   align-items: center;
                   justify-content: center;
                   margin-right: 20px;
-                  color: #1DA1F2;
+                  color: #fff;
                   font-size: 24px;
+                }
+                .x-logo {
+                  font-size: 40px;
+                  margin-bottom: 20px;
                 }
               </style>
             </head>
             <body>
               <div class="hero">
-                <h1>X Messaging App</h1>
-                <p>A simple and secure way to message other X users privately</p>
+                <div class="x-logo">𝕏</div>
+                <h1>X Messaging</h1>
+                <p>A secure way to message other X users privately</p>
                 <a href="/login" class="btn">Login with X</a>
               </div>
               
@@ -906,7 +583,7 @@ export default {
                   <div class="feature-icon">💬</div>
                   <div>
                     <h3>Simple Interface</h3>
-                    <p>Clean, WhatsApp-like interface for messaging</p>
+                    <p>Clean, minimal interface for messaging</p>
                   </div>
                 </div>
               </div>
@@ -922,6 +599,470 @@ export default {
       );
     }
 
-    return new Response("Not found", { status: 404 });
+    // Inbox route - show all conversations
+    if (url.pathname === "/inbox") {
+      if (!accessToken || !username) {
+        // Redirect to login if no access token
+        return new Response("Redirecting to login...", {
+          status: 302,
+          headers: {
+            Location: "/login",
+            ...getCorsHeaders(),
+          },
+        });
+      }
+
+      // Get all messages grouped by channel
+      const channels = await client.exec(
+        "SELECT DISTINCT channel_id FROM messages"
+      ).toArray();
+
+      return new Response(
+        html`
+          <!DOCTYPE html>
+          <html>
+            <head>
+              <title>Inbox | X Messaging</title>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1">
+              <style>
+                body { 
+                  font-family: -apple-system, BlinkMacSystemFont, sans-serif; 
+                  margin: 0; 
+                  padding: 0;
+                  height: 100vh;
+                  display: flex;
+                  flex-direction: column;
+                  background-color: #000;
+                  color: #fff;
+                }
+                header {
+                  background: #000;
+                  color: white;
+                  padding: 15px 20px;
+                  display: flex;
+                  justify-content: space-between;
+                  align-items: center;
+                  border-bottom: 1px solid #333;
+                }
+                .profile {
+                  display: flex;
+                  align-items: center;
+                  gap: 15px;
+                }
+                .profile img {
+                  border-radius: 50%;
+                  width: 32px;
+                  height: 32px;
+                }
+                .btn {
+                  display: inline-block;
+                  padding: 8px 16px;
+                  background: #fff;
+                  color: #000;
+                  text-decoration: none;
+                  border-radius: 20px;
+                  font-weight: 600;
+                  font-size: 14px;
+                }
+                .container {
+                  flex: 1;
+                  overflow: auto;
+                  padding: 0;
+                }
+                .channel {
+                  padding: 20px;
+                  border-bottom: 1px solid #333;
+                  display: flex;
+                  align-items: center;
+                  text-decoration: none;
+                  color: #fff;
+                }
+                .channel:hover {
+                  background: #111;
+                }
+                .channel-avatar {
+                  width: 48px;
+                  height: 48px;
+                  border-radius: 50%;
+                  background: #333;
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                  margin-right: 15px;
+                  font-weight: bold;
+                  font-size: 20px;
+                }
+                .channel-details {
+                  flex: 1;
+                }
+                .channel-username {
+                  font-weight: bold;
+                  margin-bottom: 5px;
+                }
+                .new-chat {
+                  position: fixed;
+                  bottom: 20px;
+                  right: 20px;
+                  width: 60px;
+                  height: 60px;
+                  border-radius: 50%;
+                  background: #fff;
+                  color: #000;
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                  text-decoration: none;
+                  font-size: 24px;
+                  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                }
+                .new-chat-modal {
+                  display: none;
+                  position: fixed;
+                  top: 0;
+                  left: 0;
+                  width: 100%;
+                  height: 100%;
+                  background: rgba(0,0,0,0.8);
+                  z-index: 100;
+                  align-items: center;
+                  justify-content: center;
+                }
+                .new-chat-form {
+                  background: #000;
+                  border: 1px solid #333;
+                  border-radius: 12px;
+                  padding: 20px;
+                  width: 90%;
+                  max-width: 400px;
+                }
+                .new-chat-form h2 {
+                  margin-top: 0;
+                  margin-bottom: 20px;
+                }
+                .new-chat-form input, 
+                .new-chat-form textarea {
+                  width: 100%;
+                  padding: 12px;
+                  margin-bottom: 15px;
+                  border: 1px solid #333;
+                  border-radius: 8px;
+                  background: #111;
+                  color: #fff;
+                  font-size: 16px;
+                }
+                .new-chat-form button {
+                  width: 100%;
+                  padding: 12px;
+                  background: #fff;
+                  color: #000;
+                  border: none;
+                  border-radius: 20px;
+                  font-weight: bold;
+                  font-size: 16px;
+                  cursor: pointer;
+                }
+                .close-modal {
+                  position: absolute;
+                  top: 15px;
+                  right: 15px;
+                  font-size: 24px;
+                  color: #fff;
+                  background: none;
+                  border: none;
+                  cursor: pointer;
+                }
+                .empty-state {
+                  display: flex;
+                  flex-direction: column;
+                  align-items: center;
+                  justify-content: center;
+                  height: 70vh;
+                  text-align: center;
+                  padding: 20px;
+                  color: #888;
+                }
+                .x-logo {
+                  font-size: 24px;
+                  margin-bottom: 10px;
+                }
+              </style>
+            </head>
+            <body>
+              <header>
+                <div class="profile">
+                  <div class="x-logo">𝕏</div>
+                  <div>Messages</div>
+                </div>
+                <a href="/logout" class="btn">Logout</a>
+              </header>
+              
+              <div class="container">
+                ${channels.length === 0 
+                  ? `
+                    <div class="empty-state">
+                      <div class="x-logo">𝕏</div>
+                      <h3>No conversations yet</h3>
+                      <p>Start a new conversation by clicking the + button</p>
+                    </div>
+                  ` 
+                  : channels.map(channel => {
+                      const channelParts = (channel.channel_id as string).split(':');
+                      const otherUser = channelParts[0] === username ? channelParts[1] : channelParts[0];
+                      const firstLetter = otherUser.charAt(0).toUpperCase();
+                      
+                      return `
+                        <a href="/${otherUser}" class="channel">
+                          <div class="channel-avatar">${firstLetter}</div>
+                          <div class="channel-details">
+                            <div class="channel-username">@${otherUser}</div>
+                            <div class="channel-preview">Tap to view conversation</div>
+                          </div>
+                        </a>
+                      `;
+                    }).join('')
+                }
+              </div>
+              
+              <a href="#" class="new-chat" id="newChatBtn">+</a>
+              
+              <div class="new-chat-modal" id="newChatModal">
+                <button class="close-modal" id="closeModal">×</button>
+                <div class="new-chat-form">
+                  <h2>New Message</h2>
+                  <form action="/message" method="post">
+                    <input type="text" name="recipient" placeholder="Username (without @)" required>
+                    <textarea name="message" placeholder="Your message" rows="4" required></textarea>
+                    <button type="submit">Send</button>
+                  </form>
+                </div>
+              </div>
+              
+              <script>
+                // Toggle new chat modal
+                document.getElementById('newChatBtn').addEventListener('click', function(e) {
+                  e.preventDefault();
+                  document.getElementById('newChatModal').style.display = 'flex';
+                });
+                
+                document.getElementById('closeModal').addEventListener('click', function() {
+                  document.getElementById('newChatModal').style.display = 'none';
+                });
+              </script>
+            </body>
+          </html>
+        `,
+        {
+          headers: {
+            "content-type": "text/html",
+            ...getCorsHeaders(),
+          },
+        },
+      );
+    }
+
+    // Dynamic user route - /{otherUsername}
+    const pathSegments = url.pathname.split('/').filter(Boolean);
+    if (pathSegments.length === 1) {
+      const otherUsername = pathSegments[0];
+      
+      if (!accessToken || !username) {
+        // Redirect to login if no access token
+        return new Response("Redirecting to login...", {
+          status: 302,
+          headers: {
+            Location: "/login",
+            ...getCorsHeaders(),
+          },
+        });
+      }
+
+      // Get user data from database
+      const userData = await client.exec(
+        "SELECT * FROM users WHERE username = ?",
+        username
+      ).one().catch(() => null);
+
+      if (!userData) {
+        return new Response("Redirecting to login...", {
+          status: 302,
+          headers: { Location: "/login", ...getCorsHeaders() },
+        });
+      }
+
+      // Create channel ID from the two usernames
+      const channelId = createChannelId(username, otherUsername);
+      
+      // Get messages for this channel
+      const messages = await client.exec(
+        "SELECT * FROM messages WHERE channel_id = ? ORDER BY created_at ASC",
+        channelId
+      ).toArray();
+
+      return new Response(
+        html`
+          <!DOCTYPE html>
+          <html>
+            <head>
+              <title>@${otherUsername} | X Messaging</title>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1">
+              <style>
+                body { 
+                  font-family: -apple-system, BlinkMacSystemFont, sans-serif; 
+                  margin: 0; 
+                  padding: 0;
+                  height: 100vh;
+                  display: flex;
+                  flex-direction: column;
+                  background-color: #000;
+                  color: #fff;
+                }
+                header {
+                  background: #000;
+                  color: white;
+                  padding: 15px 20px;
+                  display: flex;
+                  align-items: center;
+                  border-bottom: 1px solid #333;
+                }
+                .back-button {
+                  margin-right: 15px;
+                  text-decoration: none;
+                  color: #fff;
+                  font-size: 20px;
+                }
+                .user-info {
+                  flex: 1;
+                  font-weight: bold;
+                }
+                .messages-container {
+                  flex: 1;
+                  overflow-y: auto;
+                  padding: 20px;
+                }
+                .message {
+                  max-width: 80%;
+                  padding: 12px 16px;
+                  margin-bottom: 10px;
+                  border-radius: 18px;
+                  position: relative;
+                }
+                .message-outgoing {
+                  background: #333;
+                  color: #fff;
+                  margin-left: auto;
+                  border-bottom-right-radius: 4px;
+                }
+                .message-incoming {
+                  background: #222;
+                  color: #fff;
+                  margin-right: auto;
+                  border-bottom-left-radius: 4px;
+                }
+                .message-time {
+                  font-size: 0.7em;
+                  margin-top: 5px;
+                  opacity: 0.7;
+                }
+                .message-input {
+                  padding: 15px;
+                  border-top: 1px solid #333;
+                }
+                .message-form {
+                  display: flex;
+                  gap: 10px;
+                }
+                .message-form input {
+                  flex: 1;
+                  padding: 14px;
+                  border: 1px solid #333;
+                  border-radius: 24px;
+                  background: #111;
+                  color: #fff;
+                  font-size: 16px;
+                }
+                .message-form button {
+                  background: #fff;
+                  color: #000;
+                  border: none;
+                  border-radius: 50%;
+                  width: 46px;
+                  height: 46px;
+                  font-size: 20px;
+                  cursor: pointer;
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                }
+                .empty-state {
+                  display: flex;
+                  flex-direction: column;
+                  align-items: center;
+                  justify-content: center;
+                  height: 100%;
+                  text-align: center;
+                  padding: 20px;
+                  color: #888;
+                }
+              </style>
+            </head>
+            <body>
+              <header>
+                <a href="/inbox" class="back-button">←</a>
+                <div class="user-info">@${otherUsername}</div>
+              </header>
+              
+              <div class="messages-container" id="messagesContainer">
+                ${messages.length === 0 
+                  ? `
+                    <div class="empty-state">
+                      <p>No messages yet</p>
+                      <p>Send a message to start the conversation</p>
+                    </div>
+                  ` 
+                  : messages.map(msg => {
+                      const isOutgoing = msg.login === username;
+                      const time = new Date(msg.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                      
+                      return `
+                        <div class="message ${isOutgoing ? 'message-outgoing' : 'message-incoming'}">
+                          ${msg.message}
+                          <div class="message-time">${time}</div>
+                        </div>
+                      `;
+                    }).join('')
+                }
+              </div>
+              
+              <div class="message-input">
+                <form class="message-form" action="/message" method="post">
+                  <input type="hidden" name="recipient" value="${otherUsername}">
+                  <input type="text" name="message" placeholder="Message" required autofocus>
+                  <button type="submit">→</button>
+                </form>
+              </div>
+              
+              <script>
+                // Auto-scroll to bottom of messages
+                const messagesContainer = document.getElementById('messagesContainer');
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+              </script>
+            </body>
+          </html>
+        `,
+        {
+          headers: {
+            "content-type": "text/html",
+            ...getCorsHeaders(),
+          },
+        },
+      );
+    }
+
+    return new Response("Not found", { 
+      status: 404,
+      headers: getCorsHeaders()
+    });
   },
 };

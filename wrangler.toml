@@ -17,5 +17,6 @@ new_sqlite_classes = ["DORM"]
 
 [vars]
 X_CLIENT_ID = "MWlyVUFQWm5fN01qWTlnaVlBbmY6MTpjaQ"
-X_REDIRECT_URI = "https://login.xymake.com/callback"
-LOGIN_REDIRECT_URI = "/dashboard"
+# X_REDIRECT_URI = "https://chat.xymake.com/callback"
+X_REDIRECT_URI = "http://localhost:3000/callback"
+LOGIN_REDIRECT_URI = "/"
